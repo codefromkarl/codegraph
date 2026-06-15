@@ -475,7 +475,33 @@ export const godotResolver: FrameworkResolver = {
       });
     }
 
-    // ── 6. $ NodePath references: $Node/Path, $/root/Node ──
+    // ── 6. @rpc annotations — mark functions as network entry points ──
+    const rpcRegex = /^\s*@rpc(?:\s*\(([^)]*)\))?/gm;
+    while ((match = rpcRegex.exec(content)) !== null) {
+      const rpcMode = match[1] || 'unreliable';
+      const line = content.slice(0, match.index).split('\n').length;
+
+      // Look for the next function definition after this annotation
+      const after = content.slice(match.index + match[0].length);
+      const funcMatch = after.match(/^\s*func\s+(\w+)/m);
+      if (funcMatch) {
+        const funcName = funcMatch[1]!;
+        const funcLine = line + after.slice(0, funcMatch.index).split('\n').length;
+        // Create a synthetic reference marking this function as an RPC entry point
+        references.push({
+          fromNodeId: `file:${filePath}`,
+          referenceName: funcName,
+          referenceKind: 'references',
+          line: funcLine,
+          column: match.index,
+          filePath,
+          language: 'gdscript',
+          candidates: [`rpc_mode:${rpcMode}`],
+        });
+      }
+    }
+
+    // ── 7. $ NodePath references: $Node/Path, $/root/Node ──
     // These create references from the file to the target script
     const nodepathRegex = /\$(\/[^;)\]\n\r]+|[A-Za-z_]\w*(?:\/[A-Za-z_]\w*)*)/g;
     while ((match = nodepathRegex.exec(content)) !== null) {

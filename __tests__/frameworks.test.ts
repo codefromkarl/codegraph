@@ -1788,6 +1788,31 @@ class_name MyPlayer
     expect(result).toBeNull();
   });
 
+  it('detects @rpc annotations and marks functions', () => {
+    const src = `
+extends Node
+
+@rpc("any_peer", "call_local", "reliable")
+func sync_position(pos: Vector2):
+  position = pos
+
+@rpc
+func sync_health(hp: int):
+  pass
+`;
+    const { references } = godotResolver.extract!('player.gd', src);
+    const rpcRefs = references.filter((r) => r.candidates && r.candidates[0]!.startsWith('rpc_mode'));
+    expect(rpcRefs.length).toBe(2);
+    expect(rpcRefs.map((r) => r.referenceName)).toContain('sync_position');
+    expect(rpcRefs.map((r) => r.referenceName)).toContain('sync_health');
+    // First RPC has mode params
+    const posRef = rpcRefs.find((r) => r.referenceName === 'sync_position');
+    expect(posRef!.candidates![0]).toContain('rpc_mode:');
+    expect(posRef!.candidates![0]).toContain('any_peer');
+    // Second RPC has no params → default
+    expect(rpcRefs.find((r) => r.referenceName === 'sync_health')!.candidates![0]).toBe('rpc_mode:unreliable');
+  });
+
   describe('godotResolver.tscn parsing', () => {
     it('extracts script references from ext_resource', () => {
       const src = `[gd_scene load_steps=2 format=3]
