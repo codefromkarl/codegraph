@@ -1844,6 +1844,20 @@ func _ready():
     expect(groupRefs.map((r) => r.referenceName)).toContain('invincible');
   });
 
+  it('parses .tres resource files', () => {
+    const src = `[gd_resource type="Resource" load_steps=2 format=3]
+[ext_resource type="Script" path="res://items/item_data.gd" id="1"]
+[resource]
+script = ExtResource("1")
+name = "Sword"
+damage = 10
+`;
+    const { references } = godotResolver.extract!('item.tres', src);
+    const imports = references.filter((r) => r.referenceKind === 'imports');
+    expect(imports.length).toBe(1);
+    expect(imports[0]!.referenceName).toBe('items/item_data.gd');
+  });
+
   describe('godotResolver.tscn parsing', () => {
     it('extracts script references from ext_resource', () => {
       const src = `[gd_scene load_steps=2 format=3]

@@ -590,10 +590,14 @@ function extractTscn(
   const nodeScripts: Array<{ nodeName: string; scriptPath: string; line: number }> = [];
   const instanceScenes: Array<{ scenePath: string; line: number }> = [];
 
-  // Split into [node ...] blocks
-  const nodeBlocks = content.split(/(?=\[node\s)/);
+  // Track script bindings from [node] and [resource] blocks
+  // Split into [node ...] or [resource ...] blocks
+  const nodeBlocks = content.split(/(?=\[(?:node|resource)\s|\[resource\])/);
+
   for (const block of nodeBlocks) {
-    if (!block.startsWith('[node')) continue;
+    const isNodeBlock = block.startsWith('[node');
+    const isResourceBlock = !isNodeBlock && block.startsWith('[resource');
+    if (!isNodeBlock && !isResourceBlock) continue;
 
     const nameM = block.match(/name="([^"]+)"/);
     const instanceM = block.match(/instance\s*=\s*ExtResource\("(\d+)"\)/);
