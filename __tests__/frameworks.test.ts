@@ -1813,6 +1813,37 @@ func sync_health(hp: int):
     expect(rpcRefs.find((r) => r.referenceName === 'sync_health')!.candidates![0]).toBe('rpc_mode:unreliable');
   });
 
+  it('detects group dispatch calls (call_group)', () => {
+    const src = `
+extends Node
+
+func _ready():
+  get_tree().call_group("enemies", "take_damage", 10)
+  get_tree().notification_group("ui", "update_health")
+`;
+    const { references } = godotResolver.extract!('main.gd', src);
+    const groupRefs = references.filter((r) => r.candidates && r.candidates[0]!.startsWith('group_dispatch'));
+    expect(groupRefs.length).toBe(2);
+    expect(groupRefs.map((r) => r.referenceName)).toContain('take_damage');
+    expect(groupRefs.map((r) => r.referenceName)).toContain('update_health');
+    expect(groupRefs[0]!.candidates![0]).toContain('enemies');
+  });
+
+  it('detects group membership (add_to_group)', () => {
+    const src = `
+extends Node
+
+func _ready():
+  add_to_group("enemies")
+  remove_from_group("invincible")
+`;
+    const { references } = godotResolver.extract!('enemy.gd', src);
+    const groupRefs = references.filter((r) => r.candidates && r.candidates[0]!.startsWith('group_membership'));
+    expect(groupRefs.length).toBe(2);
+    expect(groupRefs.map((r) => r.referenceName)).toContain('enemies');
+    expect(groupRefs.map((r) => r.referenceName)).toContain('invincible');
+  });
+
   describe('godotResolver.tscn parsing', () => {
     it('extracts script references from ext_resource', () => {
       const src = `[gd_scene load_steps=2 format=3]

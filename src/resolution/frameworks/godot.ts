@@ -501,7 +501,45 @@ export const godotResolver: FrameworkResolver = {
       }
     }
 
-    // ── 7. $ NodePath references: $Node/Path, $/root/Node ──
+    // ── 7. Group references: add_to_group / call_group / get_nodes_in_group ──
+    const groupCallRegex = /(?:get_tree\(\)\.)?(call_group|notification_group)\s*\(\s*["']([^"']+)["']\s*,\s*["']([^"']+)["']/g;
+    while ((match = groupCallRegex.exec(content)) !== null) {
+      const fnCall = match[1]!;
+      const groupName = match[2]!;
+      const methodName = match[3]!;
+      const line = content.slice(0, match.index).split('\n').length;
+
+      references.push({
+        fromNodeId: `file:${filePath}`,
+        referenceName: methodName,
+        referenceKind: 'references',
+        line,
+        column: match.index,
+        filePath,
+        language: 'gdscript',
+        candidates: [`group_dispatch:${fnCall}::${groupName}`],
+      });
+    }
+
+    // add_to_group / remove_from_group — group membership tracking
+    const groupMemberRegex = /(?:add_to_group|remove_from_group)\s*\(\s*["']([^"']+)["']/g;
+    while ((match = groupMemberRegex.exec(content)) !== null) {
+      const groupName = match[1]!;
+      const line = content.slice(0, match.index).split('\n').length;
+
+      references.push({
+        fromNodeId: `file:${filePath}`,
+        referenceName: groupName,
+        referenceKind: 'references',
+        line,
+        column: match.index,
+        filePath,
+        language: 'gdscript',
+        candidates: [`group_membership:${groupName}`],
+      });
+    }
+
+    // ── 8. $ NodePath references: $Node/Path, $/root/Node ──
     // These create references from the file to the target script
     const nodepathRegex = /\$(\/[^;)\]\n\r]+|[A-Za-z_]\w*(?:\/[A-Za-z_]\w*)*)/g;
     while ((match = nodepathRegex.exec(content)) !== null) {
