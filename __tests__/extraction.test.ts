@@ -10,7 +10,7 @@ import * as path from 'path';
 import * as os from 'os';
 import { CodeGraph } from '../src';
 import { extractFromSource, scanDirectory, buildDefaultIgnore } from '../src/extraction';
-import { detectLanguage, isLanguageSupported, getSupportedLanguages, initGrammars, loadAllGrammars, loadGrammarsForLanguages, isSourceFile } from '../src/extraction/grammars';
+import { detectLanguage, isLanguageSupported, getSupportedLanguages, initGrammars, loadAllGrammars, loadGrammarsForLanguages, isSourceFile, isFileLevelOnlyLanguage } from '../src/extraction/grammars';
 import { normalizePath } from '../src/utils';
 
 beforeAll(async () => {
@@ -6433,6 +6433,19 @@ describe('GDScript Extraction', () => {
 
   it('should report GDScript as supported', () => {
     expect(isLanguageSupported('gdscript')).toBe(true);
+  });
+
+  it('should detect Godot scene files', () => {
+    expect(detectLanguage('level.tscn')).toBe('godot_scene');
+    expect(detectLanguage('theme.tres')).toBe('godot_scene');
+  });
+
+  it('should report Godot scene as supported', () => {
+    expect(isLanguageSupported('godot_scene')).toBe(true);
+  });
+
+  it('should treat Godot scene as file-level only', () => {
+    expect(isFileLevelOnlyLanguage('godot_scene')).toBe(true);
   });
 
   it('should extract function declarations', () => {

@@ -10,7 +10,7 @@ import * as path from 'path';
 import { Parser, Language as WasmLanguage } from 'web-tree-sitter';
 import { Language } from '../types';
 
-export type GrammarLanguage = Exclude<Language, 'svelte' | 'vue' | 'astro' | 'liquid' | 'razor' | 'yaml' | 'twig' | 'xml' | 'properties' | 'unknown'>;
+export type GrammarLanguage = Exclude<Language, 'svelte' | 'vue' | 'astro' | 'liquid' | 'razor' | 'yaml' | 'twig' | 'xml' | 'properties' | 'godot_scene' | 'unknown'>;
 
 /**
  * WASM filename map — maps each language to its .wasm grammar file
@@ -117,6 +117,10 @@ export const EXTENSION_MAP: Record<string, Language> = {
   // per leaf key, and the Spring resolver links `@Value("${k}")` references.
   '.properties': 'properties',
   '.gd': 'gdscript',
+  // Godot scene/ resource files — file-level tracking; the Godot framework
+  // resolver parses ext_resource references and editor-wired signal connections.
+  '.tscn': 'godot_scene',
+  '.tres': 'godot_scene',
 };
 
 /**
@@ -320,6 +324,7 @@ export function isLanguageSupported(language: Language): boolean {
   if (language === 'twig') return true; // file-level tracking only
   if (language === 'xml') return true; // MyBatis mapper extractor
   if (language === 'properties') return true; // Spring config keys
+  if (language === 'godot_scene') return true; // file-level tracking only; Godot resolver parses ext_resource + connections
   if (language === 'unknown') return false;
   return language in WASM_GRAMMAR_FILES;
 }
@@ -331,6 +336,7 @@ export function isGrammarLoaded(language: Language): boolean {
   if (language === 'svelte' || language === 'vue' || language === 'astro' || language === 'liquid' || language === 'razor') return true;
   if (language === 'yaml' || language === 'twig') return true; // no WASM grammar needed
   if (language === 'xml' || language === 'properties') return true; // no WASM grammar needed
+  if (language === 'godot_scene') return true; // no WASM grammar needed
   return languageCache.has(language);
 }
 
@@ -344,14 +350,14 @@ export function isGrammarLoaded(language: Language): boolean {
  * indexed rather than skipped, so it must stay in sync with that branch.
  */
 export function isFileLevelOnlyLanguage(language: Language): boolean {
-  return language === 'yaml' || language === 'twig' || language === 'properties';
+  return language === 'yaml' || language === 'twig' || language === 'properties' || language === 'godot_scene';
 }
 
 /**
  * Get all supported languages (those with grammar definitions).
  */
 export function getSupportedLanguages(): Language[] {
-  return [...(Object.keys(WASM_GRAMMAR_FILES) as GrammarLanguage[]), 'svelte', 'vue', 'astro', 'liquid'];
+  return [...(Object.keys(WASM_GRAMMAR_FILES) as GrammarLanguage[]), 'svelte', 'vue', 'astro', 'liquid', 'godot_scene'];
 }
 
 /**
@@ -426,6 +432,7 @@ export function getLanguageDisplayName(language: Language): string {
     luau: 'Luau',
     objc: 'Objective-C',
     gdscript: 'GDScript',
+    godot_scene: 'Godot Scene',
     yaml: 'YAML',
     twig: 'Twig',
     xml: 'XML',

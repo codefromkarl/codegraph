@@ -1784,4 +1784,52 @@ class_name MyPlayer
     const result = godotResolver.resolve!(ref, null as any);
     expect(result).toBeNull();
   });
+
+  describe('godotResolver.tscn parsing', () => {
+    it('extracts script references from ext_resource', () => {
+      const src = `[gd_scene load_steps=2 format=3]
+[ext_resource type="Script" path="res://player.gd" id="1"]
+[ext_resource type="Script" path="res://ui/healthbar.gd" id="2"]
+[node name="Player" type="CharacterBody2D"]
+script = ExtResource("1")
+[node name="HealthBar" type="ProgressBar" parent="Player"]
+script = ExtResource("2")
+`;
+      const { references } = godotResolver.extract!('player.tscn', src);
+      const imports = references.filter((r) => r.referenceKind === 'imports');
+      expect(imports.length).toBe(2);
+      expect(imports.map((r) => r.referenceName)).toContain('res://player.gd');
+      expect(imports.map((r) => r.referenceName)).toContain('res://ui/healthbar.gd');
+    });
+
+    it('extracts instanced child scene references', () => {
+      const src = `[gd_scene load_steps=2 format=3]
+[ext_resource type="PackedScene" path="res://enemies/bullet.tscn" id="1"]
+[node name="BulletSpawner" type="Marker2D"]
+[node name="Bullet" type="Node2D" parent="."]
+instance = ExtResource("1")
+`;
+      const { references } = godotResolver.extract!('main.tscn', src);
+      const imports = references.filter((r) => r.referenceKind === 'imports');
+      expect(imports.length).toBe(1);
+      expect(imports[0]!.referenceName).toBe('res://enemies/bullet.tscn');
+    });
+
+    it('extracts editor-wired signal connections', () => {
+      const src = `[gd_scene load_steps=2 format=3]
+[ext_resource type="Script" path="res://player.gd" id="1"]
+[ext_resource type="Script" path="res://ui/healthbar.gd" id="2"]
+[node name="Player" type="CharacterBody2D"]
+script = ExtResource("1")
+[node name="HealthBar" type="ProgressBar" parent="."]
+script = ExtResource("2")
+[connection signal="health_changed" from="Player" to="HealthBar" method="_on_health_changed"]
+`;
+      const { references } = godotResolver.extract!('main.tscn', src);
+      const handlerRefs = references.filter((r) => r.referenceKind === 'references' && r.referenceName === '_on_health_changed');
+      expect(handlerRefs.length).toBe(1);
+      expect(handlerRefs[0]!.candidates).toBeDefined();
+      expect(handlerRefs[0]!.candidates![0]).toContain('signal:res://player.gd:health_changed');
+    });
+  });
 });

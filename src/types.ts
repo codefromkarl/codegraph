@@ -91,6 +91,7 @@ export const LANGUAGES = [
   'luau',
   'objc',
   'gdscript',
+  'godot_scene',
   'r',
   'yaml',
   'twig',

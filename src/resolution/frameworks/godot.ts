@@ -218,7 +218,7 @@ const BUILTIN_FUNCTIONS = new Set([
 
 export const godotResolver: FrameworkResolver = {
   name: 'godot',
-  languages: ['gdscript'],
+  languages: ['gdscript', 'godot_scene'],
 
   detect(context: ResolutionContext): boolean {
     return context.fileExists('project.godot');
@@ -258,11 +258,16 @@ export const godotResolver: FrameworkResolver = {
   },
 
   extract(filePath: string, content: string): FrameworkExtractionResult {
-    if (!filePath.endsWith('.gd')) return { nodes: [], references: [] };
-
     const nodes: Node[] = [];
     const references: UnresolvedRef[] = [];
     const now = Date.now();
+
+    // ── .tscn / .tres scene/resource file parsing ──
+    if (filePath.endsWith('.tscn') || filePath.endsWith('.tres')) {
+      return extractTscn(filePath, content, nodes, references, now);
+    }
+
+    if (!filePath.endsWith('.gd')) return { nodes: [], references: [] };
 
     // ── 1. Signal declarations: signal NAME(param1, param2, ...) ──
     const signalRegex = /^\s*signal\s+(\w+)\s*(?:\(([^)]*)\))?/gm;
@@ -394,5 +399,133 @@ export const godotResolver: FrameworkResolver = {
     return { nodes, references };
   },
 };
+
+/**
+ * Parse a Godot .tscn / .tres file and extract resource references, script
+ * bindings, and editor-wired signal connections.
+ */
+function extractTscn(
+  filePath: string,
+  content: string,
+  _nodes: Node[],
+  references: UnresolvedRef[],
+  _now: number
+): FrameworkExtractionResult {
+  // Map ext_resource id → path
+  const extResources = new Map<string, string>();
+
+  // Two orderings: path="..." id="N" or id="N" path="..."
+  const erRegex1 = /\[ext_resource\s+[^\]]*?path="([^"]+)"[^\]]*?id="(\d+)"[^\]]*\]/g;
+  const erRegex2 = /\[ext_resource\s+[^\]]*?id="(\d+)"[^\]]*?path="([^"]+)"[^\]]*\]/g;
+  let match: RegExpExecArray | null;
+  while ((match = erRegex1.exec(content)) !== null) {
+    extResources.set(match[2]!, match[1]!);
+  }
+  while ((match = erRegex2.exec(content)) !== null) {
+    extResources.set(match[1]!, match[2]!);
+  }
+
+  // Track which node has which script
+  const nodeScripts: Array<{ nodeName: string; scriptPath: string; line: number }> = [];
+  const instanceScenes: Array<{ scenePath: string; line: number }> = [];
+
+  // Split into [node ...] blocks
+  const nodeBlocks = content.split(/(?=\[node\s)/);
+  for (const block of nodeBlocks) {
+    if (!block.startsWith('[node')) continue;
+
+    const nameM = block.match(/name="([^"]+)"/);
+    const instanceM = block.match(/instance\s*=\s*ExtResource\("(\d+)"\)/);
+    const nodeName = nameM ? nameM[1]! : '';
+
+    // Instanced child scene
+    if (instanceM) {
+      const scenePath = extResources.get(instanceM[1]!);
+      if (scenePath) {
+        const line = content.slice(0, block.indexOf('[node')).split('\n').length;
+        instanceScenes.push({ scenePath, line });
+      }
+    }
+
+    // script = ExtResource("N")
+    const scriptM = block.match(/script\s*=\s*ExtResource\("(\d+)"\)/);
+    if (scriptM) {
+      const scriptPath = extResources.get(scriptM[1]!);
+      if (scriptPath && scriptPath.endsWith('.gd')) {
+        const line = content.slice(0, block.indexOf(scriptM[0])).split('\n').length;
+        nodeScripts.push({ nodeName, scriptPath, line });
+      }
+    }
+
+    // script = Resource("res://...")
+    const scriptM2 = block.match(/script\s*=\s*Resource\("([^"]+)"\)/);
+    if (scriptM2) {
+      const scriptPath = scriptM2[1]!;
+      if (scriptPath.endsWith('.gd')) {
+        const line = content.slice(0, block.indexOf(scriptM2[0])).split('\n').length;
+        nodeScripts.push({ nodeName, scriptPath, line });
+      }
+    }
+  }
+
+  // ── Scene → script references ──
+  for (const ns of nodeScripts) {
+    references.push({
+      fromNodeId: `file:${filePath}`,
+      referenceName: ns.scriptPath,
+      referenceKind: 'imports',
+      line: ns.line,
+      column: 0,
+      filePath,
+      language: 'godot_scene',
+    });
+  }
+
+  // ── Scene → instanced child scene references ──
+  for (const inst of instanceScenes) {
+    references.push({
+      fromNodeId: `file:${filePath}`,
+      referenceName: inst.scenePath,
+      referenceKind: 'imports',
+      line: inst.line,
+      column: 0,
+      filePath,
+      language: 'godot_scene',
+    });
+  }
+
+  // ── Editor-wired signal connections ──
+  const connRegex = /\[connection\s+signal="([^"]+)"\s+from="([^"]+)"\s+to="([^"]+)"\s+method="([^"]+)"/g;
+  while ((match = connRegex.exec(content)) !== null) {
+    const signalName = match[1]!;
+    const fromNode = match[2]!;
+    const toNode = match[4]!;
+    const methodName = match[4]!;
+    const line = content.slice(0, match.index).split('\n').length;
+
+    // Resolve 'to' node's script for the fromNodeId
+    const toScript = nodeScripts.find((ns) => ns.nodeName === toNode);
+    const toRef = toScript ? `file:${toScript.scriptPath}` : `file:${filePath}`;
+
+    // Resolve 'from' node's script for the candidates hint
+    const fromScript = nodeScripts.find((ns) => ns.nodeName === fromNode);
+    const signalId = fromScript
+      ? `signal:${fromScript.scriptPath}:${signalName}`
+      : `signal:${filePath}:${signalName}`;
+
+    references.push({
+      fromNodeId: toRef,
+      referenceName: methodName,
+      referenceKind: 'references',
+      line,
+      column: 0,
+      filePath,
+      language: 'gdscript',
+      candidates: [signalId],
+    });
+  }
+
+  return { nodes: [], references };
+}
 
 
