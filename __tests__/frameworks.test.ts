@@ -1669,3 +1669,119 @@ export class UsersController {
     expect(references.map((r) => r.referenceName)).toEqual(['real']);
   });
 });
+
+import { godotResolver } from '../src/resolution/frameworks/godot';
+
+describe('godotResolver.extract', () => {
+  it('extracts signal declarations as nodes', () => {
+    const src = `
+extends Node
+
+signal health_changed(new_value)
+signal died()
+`;
+    const { nodes } = godotResolver.extract!('player.gd', src);
+    const signalNodes = nodes.filter((n) => n.signature?.startsWith('signal'));
+    expect(signalNodes.length).toBe(2);
+    expect(signalNodes[0]!.name).toBe('health_changed');
+    expect(signalNodes[1]!.name).toBe('died');
+  });
+
+  it('creates references for X.connect(Y) calls', () => {
+    const src = `
+extends Node
+
+func _ready():
+  health_changed.connect(_on_health_changed)
+  died.connect(_on_died)
+`;
+    const { references } = godotResolver.extract!('player.gd', src);
+    const handlerRefs = references.filter((r) => r.referenceKind === 'references');
+    expect(handlerRefs.length).toBeGreaterThanOrEqual(2);
+    expect(handlerRefs.map((r) => r.referenceName)).toContain('_on_health_changed');
+    expect(handlerRefs.map((r) => r.referenceName)).toContain('_on_died');
+  });
+
+  it('creates references for preload() calls', () => {
+    const src = `
+extends Node
+
+func test():
+  var Bullet = preload("res://bullet.tscn")
+`;
+    const { references } = godotResolver.extract!('shooter.gd', src);
+    const importRefs = references.filter((r) => r.referenceKind === 'imports');
+    expect(importRefs.length).toBe(1);
+    expect(importRefs[0]!.referenceName).toBe('res://bullet.tscn');
+  });
+
+  it('creates references for $ nodepath syntax', () => {
+    const src = `
+extends Node
+
+@onready var player = $Player
+@onready var ui = $UI/HUD
+`;
+    const { references } = godotResolver.extract!('main.gd', src);
+    const pathRefs = references.filter((r) => r.referenceKind === 'references');
+    expect(pathRefs.length).toBeGreaterThanOrEqual(2);
+    expect(pathRefs.map((r) => r.referenceName)).toContain('Player');
+    expect(pathRefs.map((r) => r.referenceName)).toContain('UI/HUD');
+  });
+
+  it('extracts class_name as module nodes', () => {
+    const src = `
+extends Node
+
+class_name MyPlayer
+`;
+    const { nodes } = godotResolver.extract!('player.gd', src);
+    const moduleNodes = nodes.filter((n) => n.kind === 'module');
+    expect(moduleNodes.length).toBe(1);
+    expect(moduleNodes[0]!.name).toBe('MyPlayer');
+  });
+
+  it('rejects built-in types', () => {
+    const ref: UnresolvedRef = {
+      fromNodeId: 'test',
+      referenceName: 'Node2D',
+      referenceKind: 'references',
+      line: 1,
+      column: 0,
+      filePath: 'test.gd',
+      language: 'gdscript',
+    };
+    const result = godotResolver.resolve!(ref, null as any);
+    expect(result).not.toBeNull();
+    expect(result!.confidence).toBe(0.9);
+  });
+
+  it('rejects built-in functions', () => {
+    const ref: UnresolvedRef = {
+      fromNodeId: 'test',
+      referenceName: 'print',
+      referenceKind: 'references',
+      line: 1,
+      column: 0,
+      filePath: 'test.gd',
+      language: 'gdscript',
+    };
+    const result = godotResolver.resolve!(ref, null as any);
+    expect(result).not.toBeNull();
+    expect(result!.confidence).toBe(0.9);
+  });
+
+  it('passes through user-defined names', () => {
+    const ref: UnresolvedRef = {
+      fromNodeId: 'test',
+      referenceName: 'calculate_damage',
+      referenceKind: 'references',
+      line: 1,
+      column: 0,
+      filePath: 'test.gd',
+      language: 'gdscript',
+    };
+    const result = godotResolver.resolve!(ref, null as any);
+    expect(result).toBeNull();
+  });
+});

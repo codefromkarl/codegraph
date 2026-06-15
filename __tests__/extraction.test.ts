@@ -10,7 +10,7 @@ import * as path from 'path';
 import * as os from 'os';
 import { CodeGraph } from '../src';
 import { extractFromSource, scanDirectory, buildDefaultIgnore } from '../src/extraction';
-import { detectLanguage, isLanguageSupported, getSupportedLanguages, initGrammars, loadAllGrammars, isSourceFile } from '../src/extraction/grammars';
+import { detectLanguage, isLanguageSupported, getSupportedLanguages, initGrammars, loadAllGrammars, loadGrammarsForLanguages, isSourceFile } from '../src/extraction/grammars';
 import { normalizePath } from '../src/utils';
 
 beforeAll(async () => {
@@ -6417,6 +6417,173 @@ local count = 0
 });
 
 // =============================================================================
+// GDScript
+// =============================================================================
+
+describe('GDScript Extraction', () => {
+  beforeAll(async () => {
+    await initGrammars();
+    await loadGrammarsForLanguages(['gdscript']);
+  });
+
+  it('should detect GDScript files', () => {
+    expect(detectLanguage('player.gd')).toBe('gdscript');
+    expect(detectLanguage('enemies/goblin.gd')).toBe('gdscript');
+  });
+
+  it('should report GDScript as supported', () => {
+    expect(isLanguageSupported('gdscript')).toBe(true);
+  });
+
+  it('should extract function declarations', () => {
+    const code = `
+extends Node
+
+func _ready():
+  print("hello")
+
+func attack(target: Node2D, damage: int = 10) -> int:
+  return damage * 2
+`;
+    const result = extractFromSource('test.gd', code, 'gdscript');
+    const functions = result.nodes.filter((n) => n.kind === 'function' || n.kind === 'method');
+    expect(functions.length).toBe(2);
+    const fnNames = functions.map((f) => f.name);
+    expect(fnNames).toContain('_ready');
+    expect(fnNames).toContain('attack');
+    const attack = functions.find((f) => f.name === 'attack');
+    expect(attack?.signature).toContain('-> int');
+  });
+
+  it('should extract class declarations', () => {
+    const code = `
+extends Node
+
+class InnerHelper:
+  var helper_name: String
+  func do_thing():
+    pass
+`;
+    const result = extractFromSource('test.gd', code, 'gdscript');
+    const classes = result.nodes.filter((n) => n.kind === 'class');
+    expect(classes.length).toBe(1);
+    expect(classes[0]!.name).toBe('InnerHelper');
+  });
+
+  it('should extract variables and constants', () => {
+    const code = `
+extends Node
+
+const MAX_SPEED = 300.0
+var direction: Vector2
+@export var speed: float = 200.0
+@onready var player = $Player
+`;
+    const result = extractFromSource('test.gd', code, 'gdscript');
+    const variables = result.nodes.filter((n) => n.kind === 'variable');
+    const constants = result.nodes.filter((n) => n.kind === 'constant');
+    // const (constant) + 2 var + @export var + @onready var
+    expect(constants.length).toBe(1);
+    expect(constants[0]!.name).toBe('MAX_SPEED');
+    expect(variables.length).toBeGreaterThanOrEqual(3);
+    expect(variables.map((v) => v.name)).toContain('speed');
+    expect(variables.map((v) => v.name)).toContain('player');
+  });
+
+  it('should extract enum declarations', () => {
+    const code = `
+extends Node
+
+enum State {
+  IDLE,
+  RUNNING,
+  ATTACKING,
+}
+`;
+    const result = extractFromSource('test.gd', code, 'gdscript');
+    const enums = result.nodes.filter((n) => n.kind === 'enum');
+    expect(enums.length).toBe(1);
+    expect(enums[0]!.name).toBe('State');
+    const members = result.nodes.filter((n) => n.kind === 'enum_member');
+    expect(members.length).toBe(3);
+    expect(members.map((m) => m.name)).toEqual(['IDLE', 'RUNNING', 'ATTACKING']);
+  });
+
+  it('should extract extends as import edge', () => {
+    const code = `
+extends Node
+
+func test():
+  pass
+`;
+    const result = extractFromSource('test.gd', code, 'gdscript');
+    const imports = result.nodes.filter((n) => n.kind === 'import');
+    expect(imports.length).toBeGreaterThanOrEqual(1);
+    expect(imports[0]!.name).toBe('Node');
+  });
+
+  it('should track function calls', () => {
+    const code = `
+extends Node
+
+func _ready():
+  move_and_slide()
+  calculate_damage(10)
+
+func calculate_damage(base: int) -> int:
+  return base * 2
+`;
+    const result = extractFromSource('test.gd', code, 'gdscript');
+    const references = result.unresolvedReferences;
+    const calleeNames = references.map((r) => r.referenceName);
+    // move_and_slide and calculate_damage should appear as references
+    expect(calleeNames).toContain('move_and_slide');
+    // functions with definitions in the same file should have resolvable refs
+    const calculateRefs = references.filter((r) => r.referenceName === 'calculate_damage');
+    expect(calculateRefs.length).toBeGreaterThanOrEqual(1);
+  });
+
+  it('should extract method calls on objects (attribute_call)', () => {
+    const code = `
+extends Node
+
+func attack_target(target: Node2D):
+  target.take_damage(10)
+`;
+    const result = extractFromSource('test.gd', code, 'gdscript');
+    const references = result.unresolvedReferences;
+    const calleeNames = references.map((r) => r.referenceName);
+    expect(calleeNames).toContain('take_damage');
+  });
+
+  it('should handle constructor_definition (_init)', () => {
+    const code = `
+extends Node
+
+func _init():
+  pass
+`;
+    const result = extractFromSource('test.gd', code, 'gdscript');
+    const functions = result.nodes.filter((n) => n.kind === 'function' || n.kind === 'method');
+    expect(functions.length).toBeGreaterThanOrEqual(1);
+    expect(functions.some((f) => f.name === '_init')).toBe(true);
+  });
+
+  it('should extract static functions', () => {
+    const code = `
+extends Node
+
+static func create() -> Node:
+  return Node.new()
+`;
+    const result = extractFromSource('test.gd', code, 'gdscript');
+    const functions = result.nodes.filter((n) => n.kind === 'function' || n.kind === 'method');
+    const create = functions.find((f) => f.name === 'create');
+    expect(create).toBeDefined();
+    expect(create!.name).toBe('create');
+  });
+});
+
 // Objective-C
 // =============================================================================
 

@@ -1872,19 +1872,31 @@ export class TreeSitterExtractor {
       });
     } else {
       // Generic fallback for other languages
-      // Try to find identifier children
-      for (let i = 0; i < node.namedChildCount; i++) {
-        const child = node.namedChild(i);
-        if (child?.type === 'identifier' || child?.type === 'variable_declarator') {
-          const name = child.type === 'identifier'
-            ? getNodeText(child, this.source)
-            : extractName(child, this.source, this.extractor);
+      // First, try language-specific extractVariables hook (GDScript, etc.)
+      const extVars = this.extractor.extractVariables?.(node, this.source);
+      if (extVars && extVars.length > 0) {
+        for (const v of extVars) {
+          const posNode = v.positionNode || node;
+          this.createNode(v.kind, v.name, posNode, {
+            docstring,
+            signature: v.signature,
+          });
+        }
+      } else {
+        // Fallback: try to find identifier children
+        for (let i = 0; i < node.namedChildCount; i++) {
+          const child = node.namedChild(i);
+          if (child?.type === 'identifier' || child?.type === 'variable_declarator') {
+            const name = child.type === 'identifier'
+              ? getNodeText(child, this.source)
+              : extractName(child, this.source, this.extractor);
 
-          if (name && name !== '<anonymous>') {
-            this.createNode(kind, name, child, {
-              docstring,
-              isExported,
-            });
+            if (name && name !== '<anonymous>') {
+              this.createNode(kind, name, child, {
+                docstring,
+                isExported,
+              });
+            }
           }
         }
       }
