@@ -1751,7 +1751,8 @@ class_name MyPlayer
       filePath: 'test.gd',
       language: 'gdscript',
     };
-    const result = godotResolver.resolve!(ref, null as any);
+    const ctx: any = { getAllFiles: () => [] };
+    const result = godotResolver.resolve!(ref, ctx);
     expect(result).not.toBeNull();
     expect(result!.confidence).toBe(0.9);
   });
@@ -1766,7 +1767,8 @@ class_name MyPlayer
       filePath: 'test.gd',
       language: 'gdscript',
     };
-    const result = godotResolver.resolve!(ref, null as any);
+    const ctx: any = { getAllFiles: () => [] };
+    const result = godotResolver.resolve!(ref, ctx);
     expect(result).not.toBeNull();
     expect(result!.confidence).toBe(0.9);
   });
@@ -1781,7 +1783,8 @@ class_name MyPlayer
       filePath: 'test.gd',
       language: 'gdscript',
     };
-    const result = godotResolver.resolve!(ref, null as any);
+    const ctx: any = { getAllFiles: () => [] };
+    const result = godotResolver.resolve!(ref, ctx);
     expect(result).toBeNull();
   });
 
@@ -1798,8 +1801,8 @@ script = ExtResource("2")
       const { references } = godotResolver.extract!('player.tscn', src);
       const imports = references.filter((r) => r.referenceKind === 'imports');
       expect(imports.length).toBe(2);
-      expect(imports.map((r) => r.referenceName)).toContain('res://player.gd');
-      expect(imports.map((r) => r.referenceName)).toContain('res://ui/healthbar.gd');
+      expect(imports.map((r) => r.referenceName)).toContain('player.gd');
+      expect(imports.map((r) => r.referenceName)).toContain('ui/healthbar.gd');
     });
 
     it('extracts instanced child scene references', () => {
@@ -1812,7 +1815,7 @@ instance = ExtResource("1")
       const { references } = godotResolver.extract!('main.tscn', src);
       const imports = references.filter((r) => r.referenceKind === 'imports');
       expect(imports.length).toBe(1);
-      expect(imports[0]!.referenceName).toBe('res://enemies/bullet.tscn');
+      expect(imports[0]!.referenceName).toBe('enemies/bullet.tscn');
     });
 
     it('extracts editor-wired signal connections', () => {
@@ -1829,7 +1832,7 @@ script = ExtResource("2")
       const handlerRefs = references.filter((r) => r.referenceKind === 'references' && r.referenceName === '_on_health_changed');
       expect(handlerRefs.length).toBe(1);
       expect(handlerRefs[0]!.candidates).toBeDefined();
-      expect(handlerRefs[0]!.candidates![0]).toContain('signal:res://player.gd:health_changed');
+      expect(handlerRefs[0]!.candidates![0]).toContain('signal:player.gd:health_changed');
     });
   });
 });

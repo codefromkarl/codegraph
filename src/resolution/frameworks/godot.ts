@@ -143,6 +143,77 @@ const BUILTIN_TYPES = new Set([
 ]);
 
 /**
+ * Module-level cache: maps node path → script path from .tscn files.
+ * Populated lazily on first detect() call.
+ */
+let tscnNodeCache: Map<string, string> | null = null;
+
+/**
+ * Clear the .tscn node cache (for testing).
+ */
+export function clearTscnCache(): void {
+  tscnNodeCache = null;
+}
+
+/**
+ * Parse all .tscn files in the project and build a node-path → script-path map.
+ */
+function buildTscnNodeCache(context: ResolutionContext): Map<string, string> {
+  if (tscnNodeCache) return tscnNodeCache;
+
+  const cache = new Map<string, string>();
+  const allFiles = context.getAllFiles();
+
+  for (const filePath of allFiles) {
+    if (!filePath.endsWith('.tscn')) continue;
+
+    const content = context.readFile(filePath);
+    if (!content) continue;
+
+    // Parse ext_resource: id → path
+    const extRes = new Map<string, string>();
+    const er1 = /\[ext_resource\s+[^\]]*?path="([^"]+)"[^\]]*?id="(\d+)"[^\]]*\]/g;
+    const er2 = /\[ext_resource\s+[^\]]*?id="(\d+)"[^\]]*?path="([^"]+)"[^\]]*\]/g;
+    let m: RegExpExecArray | null;
+    while ((m = er1.exec(content)) !== null) extRes.set(m[2]!, m[1]!);
+    while ((m = er2.exec(content)) !== null) extRes.set(m[1]!, m[2]!);
+
+    // Parse node blocks: build name→script map relative to this .tscn
+    const blocks = content.split(/(?=\[node\s)/);
+    const relativePathDir = filePath.includes('/') ? filePath.substring(0, filePath.lastIndexOf('/') + 1) : '';
+
+    for (const block of blocks) {
+      if (!block.startsWith('[node')) continue;
+      const nameM = block.match(/name="([^"]+)"/);
+      const nodeName = nameM ? nameM[1]! : '';
+      if (!nodeName) continue;
+
+      // Build a simple node path (just the leaf name — root is first unnamed node too)
+      const scriptM = block.match(/script\s*=\s*ExtResource\("(\d+)"\)/);
+      if (scriptM) {
+        const scriptPath = extRes.get(scriptM[1]!);
+        if (scriptPath && scriptPath.endsWith('.gd')) {
+          // Strip res:// prefix to get project-relative path
+          const cleanPath = scriptPath.replace(/^res\:\/\//, '');
+          cache.set(nodeName, cleanPath);
+        }
+      }
+
+      const scriptM2 = block.match(/script\s*=\s*Resource\("([^"]+)"\)/);
+      if (scriptM2) {
+        const scriptPath = scriptM2[1]!;
+        if (scriptPath.endsWith('.gd')) {
+          cache.set(nodeName, relativePathDir + scriptPath);
+        }
+      }
+    }
+  }
+
+  tscnNodeCache = cache;
+  return cache;
+}
+
+/**
  * Built-in GDScript functions that are not user-defined.
  */
 const BUILTIN_FUNCTIONS = new Set([
@@ -221,20 +292,46 @@ export const godotResolver: FrameworkResolver = {
   languages: ['gdscript', 'godot_scene'],
 
   detect(context: ResolutionContext): boolean {
-    return context.fileExists('project.godot');
+    // Check for Godot project
+    if (!context.fileExists('project.godot')) return false;
+    // Warm the .tscn node→script cache for resolve()
+    buildTscnNodeCache(context);
+    return true;
   },
 
   claimsReference(name: string): boolean {
     // Signal.connect() calls — "connect" is a Godot built-in method
     // on every Signal, but it creates a dynamic binding we want to bridge.
+    // 'emit' similarly for signal.emit().
     return name === 'connect' || name === 'emit';
   },
 
   resolve(
     ref: UnresolvedRef,
-    _context: ResolutionContext
+    context: ResolutionContext
   ): ResolvedRef | null {
-    // Skip Godot built-in types — they never resolve in user code
+    // ── Attempt 1: Resolve node path ($Name) to a .tscn-bound script ──
+    if (ref.referenceKind === 'references' && !ref.referenceName.includes('/')) {
+      const cache = tscnNodeCache ?? buildTscnNodeCache(context);
+      const scriptPath = cache.get(ref.referenceName);
+      if (scriptPath) {
+        return {
+          original: ref,
+          targetNodeId: `file:${scriptPath}`,
+          confidence: 0.7,
+          resolvedBy: 'framework',
+        };
+      }
+    }
+
+    // ── Attempt 2: Resolve signal name from candidates (emit → signal def) ──
+    if (ref.candidates && ref.candidates.length > 0) {
+      // The candidates are signal IDs like "signal:file.gd:signalName"
+      // which we inject in extract() for .emit() calls
+      return null; // Let the standard resolution handle these
+    }
+
+    // ── Attempt 3: Skip Godot built-in types ──
     if (BUILTIN_TYPES.has(ref.referenceName)) {
       return {
         original: ref,
@@ -244,7 +341,7 @@ export const godotResolver: FrameworkResolver = {
       };
     }
 
-    // Skip built-in functions
+    // ── Attempt 4: Skip built-in functions ──
     if (BUILTIN_FUNCTIONS.has(ref.referenceName)) {
       return {
         original: ref,
@@ -440,8 +537,9 @@ function extractTscn(
 
     // Instanced child scene
     if (instanceM) {
-      const scenePath = extResources.get(instanceM[1]!);
-      if (scenePath) {
+      const raw = extResources.get(instanceM[1]!);
+      if (raw) {
+        const scenePath = raw.replace(/^res\:\/\//, '');
         const line = content.slice(0, block.indexOf('[node')).split('\n').length;
         instanceScenes.push({ scenePath, line });
       }
@@ -450,17 +548,21 @@ function extractTscn(
     // script = ExtResource("N")
     const scriptM = block.match(/script\s*=\s*ExtResource\("(\d+)"\)/);
     if (scriptM) {
-      const scriptPath = extResources.get(scriptM[1]!);
-      if (scriptPath && scriptPath.endsWith('.gd')) {
-        const line = content.slice(0, block.indexOf(scriptM[0])).split('\n').length;
-        nodeScripts.push({ nodeName, scriptPath, line });
+      let scriptPath = extResources.get(scriptM[1]!);
+      if (scriptPath) {
+        scriptPath = scriptPath.replace(/^res\:\/\//, '');
+        if (scriptPath.endsWith('.gd')) {
+          const line = content.slice(0, block.indexOf(scriptM[0])).split('\n').length;
+          nodeScripts.push({ nodeName, scriptPath, line });
+        }
       }
     }
 
     // script = Resource("res://...")
     const scriptM2 = block.match(/script\s*=\s*Resource\("([^"]+)"\)/);
     if (scriptM2) {
-      const scriptPath = scriptM2[1]!;
+      let scriptPath = scriptM2[1]!;
+      scriptPath = scriptPath.replace(/^res\:\/\//, '');
       if (scriptPath.endsWith('.gd')) {
         const line = content.slice(0, block.indexOf(scriptM2[0])).split('\n').length;
         nodeScripts.push({ nodeName, scriptPath, line });
@@ -499,19 +601,24 @@ function extractTscn(
   while ((match = connRegex.exec(content)) !== null) {
     const signalName = match[1]!;
     const fromNode = match[2]!;
-    const toNode = match[4]!;
+    const toNode = match[3]!;
     const methodName = match[4]!;
     const line = content.slice(0, match.index).split('\n').length;
 
+    // Strip res:// prefix for cache lookup
+    const cleanPath = filePath.replace(/^res\:\/\//, '');
+
     // Resolve 'to' node's script for the fromNodeId
     const toScript = nodeScripts.find((ns) => ns.nodeName === toNode);
-    const toRef = toScript ? `file:${toScript.scriptPath}` : `file:${filePath}`;
+    const toScriptClean = toScript ? toScript.scriptPath.replace(/^res\:\/\//, '') : '';
+    const toRef = toScript ? `file:${toScriptClean}` : `file:${cleanPath}`;
 
     // Resolve 'from' node's script for the candidates hint
     const fromScript = nodeScripts.find((ns) => ns.nodeName === fromNode);
+    const fromScriptClean = fromScript ? fromScript.scriptPath.replace(/^res\:\/\//, '') : '';
     const signalId = fromScript
-      ? `signal:${fromScript.scriptPath}:${signalName}`
-      : `signal:${filePath}:${signalName}`;
+      ? `signal:${fromScriptClean}:${signalName}`
+      : `signal:${cleanPath}:${signalName}`;
 
     references.push({
       fromNodeId: toRef,
